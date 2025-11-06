@@ -1,0 +1,10 @@
+docker run -d ^
+  --name neo4j-local ^
+  -p 7474:7474 ^
+  -p 7687:7687 ^
+  -v neo4j_data:/data ^
+  -v "D:\MASTER's\Master Of Applied Computing\Semester 2 (Fall 2025)\Advanced Database\project":/import ^
+  -e NEO4J_AUTH=neo4j/test1234 ^
+  -e NEO4J_ACCEPT_LICENSE_AGREEMENT=yes ^
+  -e "NEO4J_PLUGINS=[\"apoc\",\"graph-data-science\",\"bloom\"]" ^
+  neo4j:latest
