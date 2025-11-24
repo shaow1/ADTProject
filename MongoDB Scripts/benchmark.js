@@ -215,113 +215,122 @@ db.invoices.aggregate([
   { $match: { product_rank: { $lte: 5 } } },
 
   // 7. Sort final output
-  { $sort: { country: 1, product_rank: 1 } }
+  { $sort: { country: 1, product_rank: 1 } },
+
+  { $limit: 5 }
 ]);
 
 
 //5. Recent Purchases by Similar Customers - Recommend TOP-15 new products
 db.invoices.aggregate([
-  // 1. Find which products customer 13085 bought
-  {
-    $match: {
-      customer_id: "13085.0",
-      invoice: { $not: /^C/ }
-    }
-  },
+  // 1) Get ALL products purchased by target customer
+  { $match: { customer_id: "13085.0", invoice: { $not: /^C/ } } },
+  { $unwind: "$items" },
   {
     $group: {
       _id: null,
-      productsBought: { $addToSet: "$stock_code" }
+      target_products: { $addToSet: "$items.stock_code" }
     }
   },
 
-  // 2. Carry the product list forward
-  { $project: { productsBought: 1 } },
+  // 2) Save target_products so we can reuse them
+  { $set: { target_products: "$target_products" } },
 
-  // 3. Join back to invoices to find similar customers
+  // 3) Lookup similar-customer purchases
   {
     $lookup: {
       from: "invoices",
-      let: { prods: "$productsBought" },
+      let: { tps: "$target_products" },
       pipeline: [
+        { $match: { invoice: { $not: /^C/ } } },
+        { $unwind: "$items" },
+
+        // similar customers = bought ANY product that target customer bought
         {
           $match: {
-            $expr: {
-              $in: ["$stock_code", "$$prods"]
-            },
-            invoice: { $not: /^C/ },
-            customer_id: { $ne: "13085.0" }
+            $expr: { $in: ["$items.stock_code", "$$tps"] }
+          }
+        },
+
+        // collect distinct similar customer IDs
+        {
+          $group: {
+            _id: "$customer_id"
           }
         }
       ],
-      as: "similarPurchases"
+      as: "similar_customers_docs"
     }
   },
 
-  { $unwind: "$similarPurchases" },
-
-  // 4. Compute max invoice_date using setWindowFields (no separate query)
+  // 4) Extract IDs as array
   {
-    $setWindowFields: {
-      sortBy: { invoice_date: -1 },
-      output: {
-        maxInvoiceDate: { $max: "$similarPurchases.invoice_date" }
+    $set: {
+      similar_customers: {
+        $map: {
+          input: "$similar_customers_docs",
+          as: "x",
+          in: "$$x._id"
+        }
       }
     }
   },
 
-  // 5. Filter to last 90 days
-  {
-    $match: {
-      $expr: {
-        $gte: [
-          "$similarPurchases.invoice_date",
-          { $dateSubtract: { startDate: "$maxInvoiceDate", unit: "day", amount: 90 } }
-        ]
-      }
-    }
-  },
-
-  // 6. Now group by product
-  {
-    $group: {
-      _id: "$similarPurchases.stock_code",
-      similar_customers: { $addToSet: "$similarPurchases.customer_id" },
-      total_quantity: { $sum: "$similarPurchases.quantity" },
-      most_recent_purchase: { $max: "$similarPurchases.invoice_date" }
-    }
-  },
-  {
-    $addFields: {
-      similar_customers: { $size: "$similar_customers" }
-    }
-  },
-
-  // 7. Join product descriptions
+  // 5) Second lookup: fetch ALL purchases of similar customers
   {
     $lookup: {
-      from: "products",
-      localField: "_id",
-      foreignField: "stock_code",
-      as: "product"
+      from: "invoices",
+      let: {
+        sim: "$similar_customers",
+        targetProds: "$target_products"
+      },
+      pipeline: [
+        { $match: { invoice: { $not: /^C/ } } },
+        { $unwind: "$items" },
+
+        // restrict to similar customers
+        {
+          $match: {
+            $expr: { $in: ["$customer_id", "$$sim"] }
+          }
+        },
+
+        // remove products target already bought
+        {
+          $match: {
+            $expr: { $not: { $in: ["$items.stock_code", "$$targetProds"] } }
+          }
+        },
+
+        // group by product
+        {
+          $group: {
+            _id: "$items.stock_code",
+            similar_customers: { $addToSet: "$customer_id" },
+            total_quantity: { $sum: "$items.quantity" },
+            avg_price: { $avg: "$items.price" }
+          }
+        },
+
+        {
+          $project: {
+            _id: 0,
+            stock_code: "$_id",
+            recommended_by_customers: { $size: "$similar_customers" },
+            total_quantity: 1,
+            avg_price: { $round: ["$avg_price", 2] }
+          }
+        },
+
+        { $sort: { recommended_by_customers: -1, total_quantity: -1 } },
+        { $limit: 15 }
+      ],
+      as: "recommendations"
     }
   },
-  { $unwind: "$product" },
 
-  // 8. Sort by popularity & return top 15
-  { $sort: { similar_customers: -1 } },
-  { $limit: 15 },
-
-  // 9. Final projection
-  {
-    $project: {
-      stock_code: "$_id",
-      description: "$product.description",
-      similar_customers: 1,
-      total_quantity: 1,
-      most_recent_purchase: 1
-    }
-  }
+  // 6) final output
+  { $project: { _id: 0, recommendations: 1 } }
 ]);
 
 //6. co purchase network customer with similar tastes
