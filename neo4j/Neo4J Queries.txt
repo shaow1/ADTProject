@@ -1,0 +1,122 @@
+Neo4J Queries
+
+
+
+
+1️⃣ Create nodes
+// Create Customer nodes
+LOAD CSV WITH HEADERS FROM 'file:///1000_data.csv' AS row
+MERGE (c:Customer {id: row.`Customer ID`})
+SET c.country = row.Country;
+
+// Create Product nodes
+LOAD CSV WITH HEADERS FROM 'file:///1000_data.csv' AS row
+MERGE (p:Product {code: row.StockCode})
+SET p.description = row.Description,
+    p.price = toFloat(row.Price);
+
+// Create Invoice nodes
+LOAD CSV WITH HEADERS FROM 'file:///clean.csv' AS row
+MERGE (i:Invoice {id: row.Invoice})
+SET i.date = datetime(replace(row.InvoiceDate, ' ', 'T'));
+
+
+
+2️⃣ Create relationships
+// Customer -> Invoice
+LOAD CSV WITH HEADERS FROM 'file:///clean.csv' AS row
+MATCH (c:Customer {id: row.`Customer ID`})
+MATCH (i:Invoice {id: row.Invoice})
+MERGE (c)-[:MADE]->(i);
+
+// Invoice -> Product
+LOAD CSV WITH HEADERS FROM 'file:///clean.csv' AS row
+MATCH (i:Invoice {id: row.Invoice})
+MATCH (p:Product {code: row.StockCode})
+MERGE (i)-[:CONTAINS {quantity: toInteger(row.Quantity)}]->(p);
+
+
+
+
+
+
+
+
+// 1. Products Frequently Bought Together
+MATCH (i:Invoice)-[:CONTAINS]->(p1:Product)
+MATCH (i)-[:CONTAINS]->(p2:Product)
+WHERE p1.code < p2.code
+RETURN p1.code AS Product1,
+       p2.code AS Product2,
+       COUNT(*) AS TimesBoughtTogether
+ORDER BY TimesBoughtTogether DESC
+LIMIT 20;
+
+
+//2. Top-N Product Recommendations for a Customer
+MATCH (c:Customer {id: "13085.0"})-[:PLACED]->(:Invoice)-[:CONTAINS]->(p:Product)
+MATCH (other:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p)
+WHERE other <> c
+MATCH (other)-[:PLACED]->(:Invoice)-[:CONTAINS]->(rec:Product)
+WHERE NOT (c)-[:PLACED]->(:Invoice)-[:CONTAINS]->(rec)
+RETURN rec.code AS RecommendedProduct,
+       COUNT(*) AS Score
+ORDER BY Score DESC
+LIMIT 10;
+
+
+//3.Customers Who Bought Specific Product(s)
+MATCH (c:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p:Product {code: "85123A"})
+RETURN DISTINCT c.id AS CustomerID, c.country AS Country;
+
+
+//4. Popular Products by Country or Region
+MATCH (c:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p:Product)
+WHERE c.country = "United Kingdom"
+RETURN p.code AS Product,
+       COUNT(*) AS PurchaseCount
+ORDER BY PurchaseCount DESC
+LIMIT 20;
+
+
+//5: Recent Purchases by Similar Customers
+//After a given date
+MATCH (c1:Customer {id: "13085.0"})-[:PLACED]->(:Invoice)-[:CONTAINS]->(p:Product)
+MATCH (c2:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p)
+WHERE c2 <> c1
+MATCH (c2)-[:PLACED]->(inv:Invoice)-[:CONTAINS]->(rec:Product)
+WHERE inv.date >= datetime("2009-12-01T00:00:00")
+RETURN DISTINCT rec.code AS Product,
+       COUNT(*) AS Frequency
+ORDER BY Frequency DESC
+LIMIT 15;
+
+
+//6. Co-purchase Network (Customers With Common Buys)
+MATCH (c1:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p:Product)
+MATCH (c2:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p)
+WHERE c1.id < c2.id
+RETURN c1.id AS Customer1,
+       c2.id AS Customer2,
+       COUNT(p) AS CommonProducts
+ORDER BY CommonProducts DESC
+LIMIT 20;
+
+
+//7. Frequently Purchased Products After Product X
+MATCH (c1:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p:Product)
+MATCH (c2:Customer)-[:PLACED]->(:Invoice)-[:CONTAINS]->(p)
+WHERE c1.id < c2.id
+RETURN c1.id AS Customer1,
+       c2.id AS Customer2,
+       COUNT(p) AS CommonProducts
+ORDER BY CommonProducts DESC
+LIMIT 20;
+
+
+//8. Most Active Customers by Purchase Volume
+MATCH (c:Customer)-[:PLACED]->(:Invoice)-[r:CONTAINS]->(:Product)
+RETURN c.id AS CustomerID,
+       SUM(r.quantity) AS TotalQuantityPurchased
+ORDER BY TotalQuantityPurchased DESC
+LIMIT 20;
